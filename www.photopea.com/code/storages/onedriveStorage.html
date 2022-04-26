@@ -1,0 +1,492 @@
+<!DOCTYPE html> 
+
+<html>
+	<head>
+
+	</head>
+	<body onload="go()">
+
+		<script type="text/javascript" >
+			var redirectUri = window.location.href;// "https://www.Photopea.com/code/storages/onedriveStorage.html";
+			var url = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=fa4732f0-43f7-4c62-8817-0fd7f53dbbed&scope=Files.ReadWrite.All&response_type=token&redirect_uri="+redirectUri;
+			
+			var endPoint = "https://graph.microsoft.com/v1.0";
+		    var sentFalse = false;		    
+			var authDone = false;
+		    var access_token = null;
+			
+			function go()
+			{
+				if (window.name == "authwin")
+		        {
+		        	authDone = false;
+		        	window.setTimeout(function()
+		            {
+		                var searchParams = new URLSearchParams(window.location.href.split("#")[1]);
+		                var onedriveCode = searchParams.get("access_token");
+		                var expires_in = searchParams.get("expires_in");
+		                if(onedriveCode && expires_in)
+		                {
+		                	window.opener.saveCode(onedriveCode, expires_in);		                
+		                }
+		                else { handleError("Could not get access token."); }
+		                window.setTimeout(function()
+		                {
+		                    window.close();
+		                }, 400);
+		            }, 100);
+		        }	        
+		        else
+		        {
+		        	if(Date.now() < localStorage.getItem("onedriveAccessTokenValidUntil"))
+		        	{
+		        		access_token = localStorage.getItem("onedriveAccessToken");
+		        	}
+					window.addEventListener("message", onMessage,false);
+					doAction(checkUser);					
+		        }				
+			}
+
+			function handleError(e)
+			{
+				console.error(e);
+				if(e.error && e.error == "multiple_colons") { send(1,"Rename path contains more than one colon."); }
+				if(e.error && e.error == "http")
+				{
+					if(e.target.status == 401)
+					{
+						send("ready",false);
+						sentFalse = true;
+					}
+					else
+					{						
+						send(1,"HTTP error: " + e.target.status + " " + e.target.statusText);
+					}
+				}
+				else
+				{
+					send("ready",false);
+					sentFalse = true;
+				}
+			}
+
+			function handleHttpError(e)
+			{
+				handleError({"error" : "http", "target" : e.target});
+			}
+
+			function authenticate(action, prms)
+		    {
+		    	sentFalse = false;
+		    	if(action) { retryAction = { "action": action, "prms": prms }; }		        
+		    	var w = window.open(url, "authwin", "width=700,height=800");
+				if(!w) { handleError("Popup window blocked.") }	
+				else
+				{
+					var popupTick = setInterval(function()
+					{
+	      				if (w.closed)
+	      				{
+	        				clearInterval(popupTick);
+	        				if (!authDone) { handleError("Authorization failed (window closed without authorization completing.") }
+	      				}
+    				}, 500);
+				}		        
+		    }
+
+			function saveCode(code, expires_in)
+		    {
+		    	localStorage.setItem("onedriveAccessToken", code);
+		    	localStorage.setItem("onedriveAccessTokenValidUntil", Date.now() + expires_in * 1000);
+		    	access_token = code;
+		    	authDone = true;
+		        send("ready",true);
+		    }
+
+		    //check valid accessToken and proceed, or try to reauthenticate
+		    function doAction(action, prms)
+		    {
+		    	if(action == signOut) { signOut(); }
+		    	else if(sentFalse) { authenticate(action,prms); }
+		    	else if(access_token)
+		    	{
+		    		action(prms);		    		
+		    	}
+		    	else { handleError("No Access Token present."); }
+		    }
+
+		    function listDir(prms, out)
+		    {
+		    	var reqPath = endPoint + "/me/drive/root:"+prms.path+":/children?$expand=thumbnails";
+		    	if(prms.path == "/") { reqPath = endPoint +"/me/drive/root/children?$expand=thumbnails"; }
+		    	if(prms.next) { reqPath = prms.next; }
+		    	var xhr = new XMLHttpRequest();
+      			xhr.open("GET", reqPath);
+        		xhr.setRequestHeader("Authorization", "Bearer " + access_token);
+        		xhr.onload = function(e)
+        		{
+        			if(e.target.status == 200) handleListResult(JSON.parse(e.target.response), prms, out);
+        			else handleHttpError(e);
+        		};
+        		xhr.onerror = function(e) { handleHttpError(e); };
+        		xhr.send();
+		    }
+
+		    function handleListResult(response,prms,out)
+		    {
+		    	if (!out) { out = []; };
+      			for (var i = 0; i < response.value.length; ++i)
+		    	{
+		    		var item = response.value[i];
+		    		if (item.hasOwnProperty("file"))
+					{
+						if(item.thumbnails.length > 0) { out.push([item.name,item.size, Date.parse(item.lastModifiedDateTime)/1000, item.thumbnails[0].medium.url]); }
+						else { out.push([item.name,item.size, Date.parse(item.lastModifiedDateTime)/1000]); }
+					}
+					else out.push([item.name,-1, Date.parse(item.lastModifiedDateTime)/1000]);
+		    	}
+		    	if(response["@odata.nextLink"])
+		    	{
+		    		prms.next = response["@odata.nextLink"];
+		    		listDir(prms, out);
+		    	}
+		    	else
+		    	{
+		    		send(0,out);
+		    	}		    	
+		    }
+
+		    function downloadFile(prms)
+		    {
+		    	var reqPath = endPoint + "/me/drive/root:"+prms.path+":/content";
+		    	var xhr = new XMLHttpRequest();
+      			xhr.open("GET", reqPath);
+      			xhr.responseType = "arraybuffer";
+        		xhr.setRequestHeader("Authorization", "Bearer " + access_token);
+        		xhr.onload = function(e)
+        		{
+        			if(e.target.status == 200) window.parent.postMessage(e.target.response,"*");
+        			else handleHttpError(e);
+        		};
+        		xhr.onerror = function(e) { handleHttpError(e); };
+        		xhr.send();
+		    }
+
+		    function makeFolder(prms)
+		    {
+		    	var path = prms.path.slice(0, -1);
+		    	var pIndex = path.lastIndexOf("/");
+		    	var reqPath = "";
+		    	if(pIndex == 0)
+		    	{
+		    		reqPath = endPoint + "/me/drive/root";
+		    	}
+		    	else
+		    	{
+		    		var pPath = path.slice(0,pIndex);
+		    		reqPath = endPoint + "/me/drive/root:"+pPath;
+		    	}
+		    	var xhr = new XMLHttpRequest();
+      			xhr.open("GET", reqPath);
+      			xhr.setRequestHeader("Authorization", "Bearer " + access_token);
+        		xhr.onload = function(e)
+        		{
+        			if(e.target.status == 200)
+        			{
+        				var xhr2 = new XMLHttpRequest();
+	        			reqPath = endPoint + "/me/drive/items/" + JSON.parse(e.target.response).id + "/children";
+	        			xhr2.open("POST", reqPath);
+	        			xhr2.setRequestHeader("Authorization", "Bearer " + access_token);
+	        			xhr2.setRequestHeader("Content-Type", "application/json");
+						//TODO: should we deal with conflict behavior?
+						var metadata = { "name": path.slice(pIndex+1), "folder": { }, /*"@microsoft.graph.conflictBehavior": "rename" */};
+						xhr2.onload = function(e)
+	        			{ 
+	        				if(e.target.status == 201) send(0,"");
+	        				else handleHttpError(e);
+	        			}
+						xhr2.onerror = function(e) { handleHttpError(e); };
+						xhr2.send(JSON.stringify(metadata));
+        			}
+        			else
+        			{
+        				handleHttpError(e);
+        			}        			    			
+        		};
+        		xhr.onerror = function(e) { handleHttpError(e); };
+        		xhr.send();
+		    }
+
+		    function deleteFile(prms)
+		    {
+		    	var reqPath = endPoint + "/me/drive/root:"+prms.path;
+		    	var xhr = new XMLHttpRequest();
+      			xhr.open("GET", reqPath);
+      			xhr.setRequestHeader("Authorization", "Bearer " + access_token);
+        		xhr.onload = function(e)
+        		{
+        			if(e.target.status == 200)
+        			{
+	        			var xhr2 = new XMLHttpRequest();
+	        			reqPath = endPoint + "/me/drive/items/" + JSON.parse(e.target.response).id;
+	        			xhr2.open("DELETE", reqPath);
+	        			xhr2.setRequestHeader("Authorization", "Bearer " + access_token);
+	        			xhr2.onload = function(e)
+	        			{ 
+	        				if(e.target.status == 204) send(0,"");
+	        				else handleHttpError(e);
+	        			}
+	        			xhr2.onerror = function(e) { handleHttpError(e); };
+						xhr2.send();
+					}
+					else handleHttpError(e);
+        		};
+        		xhr.onerror = function(e) { handleHttpError(e); };
+        		xhr.send();
+		    }
+
+		    function renameFile(prms)
+		    {
+		    	var reqPath = endPoint + "/me/drive/root:"+prms.path;
+		    	var xhr = new XMLHttpRequest();
+      			xhr.open("GET", reqPath);
+      			xhr.setRequestHeader("Authorization", "Bearer " + access_token);
+        		xhr.onload = function(e)
+        		{
+        			if(e.target.status == 200)
+        			{
+	        			var xhr2 = new XMLHttpRequest();
+	        			reqPath = endPoint + "/me/drive/items/" + JSON.parse(e.target.response).id;
+	        			xhr2.open("PATCH", reqPath);
+	        			xhr2.setRequestHeader("Authorization", "Bearer " + access_token);
+	        			xhr2.setRequestHeader("Content-Type", "application/json");
+						var metadata = { "name": prms.newName };				
+	        			xhr2.onload = function(e)
+	        			{ 
+	        				if(e.target.status == 200) send(0,"");
+	        				else handleHttpError(e);
+	        			}
+						xhr2.onerror = function(e) { handleHttpError(e); };
+						xhr2.send(JSON.stringify(metadata));
+					}
+					else handleHttpError(e);
+        		}
+        		xhr.onerror = function(e) { handleHttpError(e); };
+        		xhr.send();
+		    }
+
+		    function uploadPart(e)
+		    {
+		    	var remaining = this.remaining;
+		    	var bufferLength = this.prms.buffer.byteLength;
+		    	if(!this.uploadUrl || e.target.status == 202)
+		    	{
+		    		if(!this.uploadUrl)
+		    		{
+		    			if(e.target.status == 200)
+			    		{
+							this.uploadUrl = JSON.parse(e.target.response).uploadUrl;
+						}
+						else { handleHttpError(e); return; }
+					}
+					var partSize = 9830400;
+					var uploadSize = Math.min(partSize, remaining);
+					remaining -= uploadSize;
+					var xhr4 = new XMLHttpRequest();
+					xhr4.open("PUT", this.uploadUrl);
+					xhr4.setRequestHeader("Authorization", "Bearer " + access_token);
+					var range = "bytes " + this.end + "-" + (this.end + uploadSize - 1).toString() + "/" + bufferLength.toString();
+					xhr4.setRequestHeader("Content-Range",  range);
+					xhr4.buffer = this.buffer.slice(uploadSize);
+					xhr4.remaining = remaining;
+					xhr4.prms = this.prms;
+					xhr4.end = this.end + uploadSize;
+					xhr4.uploadUrl = this.uploadUrl;
+					xhr4.onload = uploadPart;
+					xhr4.onerror = function(e) { handleHttpError(e); };
+					xhr4.send(this.buffer.slice(0, uploadSize));					
+				}
+				else if (e.target.status == 200 || e.target.status == 201)
+				{
+					send(0,"");
+				}
+				else { handleHttpError(e); }
+		    }
+
+		    function resumableUpload(e)
+		    {
+		    	var prms = this.prms;
+		    	var bufferLength = prms.buffer.byteLength;
+				if(e.target.status == 200)
+				{
+					var uploadUrl = JSON.parse(e.target.response).uploadUrl;
+					var xhr4 = new XMLHttpRequest();
+					xhr4.open("PUT", uploadUrl);
+					xhr4.setRequestHeader("Authorization", "Bearer " + access_token);
+					//xhr4.setRequestHeader("Content-Length", bufferLength);
+					xhr4.setRequestHeader("Content-Range", "bytes 0-" + (bufferLength - 1).toString() + "/" + bufferLength.toString() )
+					xhr4.onload = function(e)
+					{
+						if(e.target.status == 200 || e.target.status == 201)
+						{
+							send(0,"");
+						}
+						else handleHttpError(e);
+					};
+					xhr4.onerror = function(e) { handleHttpError(e); };
+					xhr4.send(prms.buffer);
+					}
+				else handleHttpError(e);
+		    }
+
+		    function uploadFile(prms)
+		    {
+		    	var bufferLength = prms.buffer.byteLength;
+		    	var reqPath = endPoint + "/me/drive/root:"+prms.path;
+		    	var xhr = new XMLHttpRequest();
+      			xhr.open("GET", reqPath);
+      			xhr.setRequestHeader("Authorization", "Bearer " + access_token);
+        		xhr.onload = function(e)
+        		{
+        			if(e.target.status == 404)
+        			{
+        				//upload new file
+        				var xhr2 = new XMLHttpRequest();
+        				var pIndex = prms.path.lastIndexOf("/");
+        				reqPath = endPoint + "/me/drive/root:"+prms.path.slice(0,pIndex);
+        				xhr2.open("GET", reqPath);
+      					xhr2.setRequestHeader("Authorization", "Bearer " + access_token);
+        				xhr2.onload = function(e)
+        				{
+        					if(e.target.status == 200)
+        					{
+	        					var pId = JSON.parse(e.target.response).id;
+		        				if(bufferLength <= 4000000)
+	      						{
+	      							var xhr3 = new XMLHttpRequest();
+		        					reqPath = endPoint + "/me/drive/items/" + pId + ":/" + prms.path.slice(pIndex + 1) + ":/content";
+		        					xhr3.open("PUT", reqPath);
+		        					xhr3.setRequestHeader("Authorization", "Bearer " + access_token);
+		        					xhr3.onload = function(e)
+		        					{
+		        						if(e.target.status == 201 || e.target.status == 200) send(0,"");
+		        						else handleHttpError(e);
+		        					}
+		        					xhr3.onerror = function(e) { handleHttpError(e); };
+		        					xhr3.send(prms.buffer);
+	      						}
+	      						else
+	      						{
+	      							var xhr3 = new XMLHttpRequest();
+		        					reqPath = endPoint +  "/me/drive/items/" + pId + ":/" + prms.path.slice(pIndex + 1) + ":/createUploadSession";
+		        					xhr3.open("POST", reqPath);
+		        					xhr3.setRequestHeader("Authorization", "Bearer " + access_token);
+		        					xhr3.prms = prms;
+		        					xhr3.remaining = bufferLength;
+		        					xhr3.buffer = prms.buffer;
+		        					xhr3.end = 0;
+		        					if(bufferLength > 10048576) xhr3.onload = uploadPart;
+		        					else xhr3.onload = resumableUpload;
+		        					xhr3.onerror = function(e) { handleHttpError(e); };
+		        					xhr3.send();
+	      						}
+	      					}
+	      					else { handleHttpError(e); }
+        					
+        				}
+        				xhr2.onerror = function(e) { handleHttpError(e); };
+        				xhr2.send();		
+        			}
+        			else if(e.target.status == 200)
+        			{
+        				//overwrite existing file
+        				var fId = JSON.parse(e.target.response).id;
+        				if(bufferLength <= 4000000)
+      					{
+      						var xhr3 = new XMLHttpRequest();
+	    					reqPath = endPoint + "/me/drive/items/" + fId + "/content";
+	    					xhr3.open("PUT", reqPath);
+	    					xhr3.setRequestHeader("Authorization", "Bearer " + access_token);
+	    					xhr3.onload = function(e)
+	    					{
+	    						if(e.target.status == 201 || e.target.status == 200) send(0,"");
+	    						else handleHttpError(e);
+	    					}
+	    					xhr3.onerror = function(e) { handleHttpError(e); };
+	    					xhr3.send(prms.buffer);
+	    				}
+	    				else
+	    				{
+	    					var xhr3 = new XMLHttpRequest();
+	    					reqPath = endPoint + "/me/drive/items/" + fId + "/createUploadSession";
+	    					xhr3.open("POST", reqPath);
+        					xhr3.setRequestHeader("Authorization", "Bearer " + access_token);
+        					xhr3.prms = prms;
+        					xhr3.remaining = bufferLength;
+		        			xhr3.buffer = prms.buffer;
+		        			xhr3.end = 0;
+        					if(bufferLength > 10048576) xhr3.onload = uploadPart;
+        					else xhr3.onload = resumableUpload;
+							xhr3.onerror = function(e) { handleHttpError(e); };
+        					xhr3.send();
+	    				}
+        			}
+        			else handleHttpError(e);
+        		}
+        		xhr.onerror = function(e) { handleHttpError(e); };
+        		xhr.send();
+		    }
+
+
+		    function signOut()
+		    {
+		    	localStorage.removeItem("onedriveAccessToken");
+		    	localStorage.removeItem("onedriveAccessTokenValidUntil");
+		    	access_token = null;
+		    	var w = window.open("https://login.microsoftonline.com/common/oauth2/v2.0/logout?post_logout_redirect_uri=" + redirectUri, 'logoutwin', 'width=700,height=800');
+				if(!w) { handleError("Popup window blocked."); }
+				else
+				{ 
+					send(0,""); 
+					window.setTimeout(function()
+					{
+		                w.close();
+					}, 5000);
+				}
+		    }
+		    	
+		    function checkUser(prms)
+		    {
+		    	send("ready",true);
+		    }
+
+			function onMessage(e) {
+				if((typeof e.data) == "string") {
+					var msg = JSON.parse(e.data);
+					console.log(msg);			
+					if(msg.code=="show") { doAction(listDir, { "path" : msg.prm }); }					
+					else if(msg.code=="load") { doAction(downloadFile, { "path" : msg.prm }); }
+					else if(msg.code=="delete") { doAction(deleteFile, { "path" : msg.prm }); }
+					else if(msg.code=="save" && msg.prm.endsWith("/")) { doAction(makeFolder, { "path" : msg.prm }); }
+					else if(msg.code=="forget") { doAction(signOut); }
+					else if(msg.code=="rename") 
+					{
+						var prmSplit = msg.prm.split(":");
+						if (prmSplit.length > 2) { handleError({"error" : "multiple_colons"}); return; }
+						else { doAction(renameFile, { "path" : prmSplit[0], "newName" : prmSplit[1] }); }
+					}
+					lastMsg=msg;
+				}
+				else {
+					if(lastMsg.code=="save") doAction(uploadFile, { "path": lastMsg.prm, "buffer" : e.data });
+				}				
+			}
+
+			function send(code,prm) {
+				window.parent.postMessage(JSON.stringify({"code":code, "prm":prm}),"*");
+			}
+
+		</script>
+		
+	</body>
+</html>

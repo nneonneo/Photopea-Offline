@@ -4,14 +4,17 @@ import re
 import json
 from tqdm import tqdm
 from dataclasses import dataclass
+from pqdm.threads import pqdm
 
 root = "www.photopea.com/"
 website = "https://photopea.com/"
 urls = [
     "index.html",
+    "privacy.html",
     "style/all.css",
     "code/ext/ext.js",
     "promo/thumb256.png",
+    "promo/icon512.png",
     "code/pp/pp.js",
     "code/dbs/DBS.js",
     "rsrc/basic/basic.zip",
@@ -22,6 +25,13 @@ urls = [
     "plugins/tpls/templates.css",
     "plugins/tpls/templates.js",
     "papi/tpls.json",
+    "code/storages/deviceStorage.html",
+    "code/storages/dropboxStorage.html",
+    "code/storages/googledriveStorage.html",
+    "code/storages/onedriveStorage.html",
+    "templates/templates.css",
+    "templates/templates.js",
+    "templates/comments.html",
 ]
 
 
@@ -36,14 +46,13 @@ def dl_file(path):
 
         outfn = root + path
         os.makedirs(os.path.dirname(outfn), exist_ok=True)
-        with open(outfn, "wb") as outf:
+        with open(outfn + ".tmp", "wb") as outf:
             for chunk in r.iter_content(chunk_size=1024):
                 progress_bar.update(len(chunk))
                 outf.write(chunk)
+        os.rename(outfn + ".tmp", outfn)
 
-
-for url in urls:
-    dl_file(url)
+pqdm(urls, dl_file, n_jobs=8)
 
 db_data = open(root + "code/dbs/DBS.js").read()
 db_vars = re.findall(r"var (\w+)\s*=\s*(\{[\w\W]+?\n\s*\})\s*(?=;|/\*|var)", db_data)
@@ -94,7 +103,10 @@ def decompress_font_list(flist):
         prev_ff, prev_fsf, prev_flg, prev_cat = ff, fsf, flg, cat
 
 
+todo = []
 for font in decompress_font_list(db["FNTS"]["list"]):
     path = "rsrc/fonts/" + font.url
     if not os.path.isfile(root + path):
-        dl_file(path)
+        todo.append(path)
+
+pqdm(todo, dl_file, n_jobs=8)

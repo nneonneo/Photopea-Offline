@@ -1,0 +1,33 @@
+﻿
+<!DOCTYPE html> 
+
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, minimum-scale=1.0, maximum-scale=1.0, initial-scale=1.0" />
+		
+		<script>
+			function go() {
+				var scr = window._scr = document.createElement("script");
+					var ats = {  "async":"","defer":"","crossorigin":"anonymous",
+					"src":"https://connect.facebook.net/en_US/sdk.js#xfbml=1&version=v10.0&appId=423117247858550&autoLogAppEvents=1", 
+					"nonce":"wZ5o5487"};
+					for(var at in ats) scr.setAttribute(at, ats[at]);
+					document.body.appendChild(scr);
+					
+					var url = "https://www.photopea.com/templates", href = window.location.href, ioh=href.indexOf("#");
+					if(ioh!=-1) url+=href.slice(ioh);
+					
+					var div = document.createElement("div");
+					var out = [];
+					out.push("<div id=\"fb-root\"></div>");
+					out.push("<div class=\"fb-comments\" data-href=\""+url+"\" data-width=\"100%\" data-numposts=\"5\"></div>");
+					div.innerHTML = out.join("\n");
+					document.body.appendChild(div);
+			}
+		</script>
+	</head>
+	
+	<body onload="go()">
+	</body>
+</html>
